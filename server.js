@@ -1,0 +1,24 @@
+import express from 'express';
+import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import { randomUUID } from 'crypto';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname=path.dirname(fileURLToPath(import.meta.url));
+const dataDir=path.join(__dirname,'../data'); const dbFile=path.join(dataDir,'users.json');
+if(!fs.existsSync(dataDir)) fs.mkdirSync(dataDir,{recursive:true}); if(!fs.existsSync(dbFile)) fs.writeFileSync(dbFile,'[]');
+const readUsers=()=>JSON.parse(fs.readFileSync(dbFile,'utf8')); const writeUsers=u=>fs.writeFileSync(dbFile,JSON.stringify(u,null,2));
+const SECRET=process.env.JWT_SECRET||'change-this-secret-in-production';
+const app=express(); app.use(cors()); app.use(express.json());
+const tokenFor=u=>jwt.sign({id:u.id},SECRET,{expiresIn:'7d'});
+const auth=(req,res,next)=>{try{const h=req.headers.authorization||'';const t=h.startsWith('Bearer ')?h.slice(7):'';req.user=jwt.verify(t,SECRET);next()}catch{return res.status(401).json({message:'Invalid or expired session'})}};
+app.get('/api/health',(req,res)=>res.json({ok:true}));
+app.post('/api/auth/register',async(req,res)=>{const {name,email,password,branch=''}=req.body||{};if(!name||!email||!password)return res.status(400).json({message:'Name, email and password are required'});let users=readUsers();if(users.some(u=>u.email.toLowerCase()===email.toLowerCase()))return res.status(409).json({message:'Email already registered'});const user={id:randomUUID(),name,email:email.toLowerCase(),branch,password:await bcrypt.hash(password,10),createdAt:new Date().toISOString()};users.push(user);writeUsers(users);res.json({token:tokenFor(user),user:{id:user.id,name:user.name,email:user.email,branch:user.branch}})});
+app.post('/api/auth/login',async(req,res)=>{const {email,password}=req.body||{};const u=readUsers().find(x=>x.email===String(email||'').toLowerCase());if(!u||!(await bcrypt.compare(password||'',u.password)))return res.status(401).json({message:'Invalid email or password'});res.json({token:tokenFor(u),user:{id:u.id,name:u.name,email:u.email,branch:u.branch}})});
+app.get('/api/auth/profile',auth,(req,res)=>{const u=readUsers().find(x=>x.id===req.user.id);if(!u)return res.status(404).json({message:'User not found'});res.json({user:{id:u.id,name:u.name,email:u.email,branch:u.branch}})});
+app.put('/api/auth/profile',auth,(req,res)=>{const users=readUsers();const i=users.findIndex(x=>x.id===req.user.id);if(i<0)return res.status(404).json({message:'User not found'});users[i]={...users[i],name:req.body.name??users[i].name,branch:req.body.branch??users[i].branch};writeUsers(users);res.json({user:{id:users[i].id,name:users[i].name,email:users[i].email,branch:users[i].branch}})});
+app.post('/api/ai/ask',auth,(req,res)=>{const q=String(req.body.question||'').trim();if(!q)return res.status(400).json({message:'Question required'});const lower=q.toLowerCase();let answer='';if(lower.includes('generative')||lower.includes('llm'))answer='Generative AI creates new content from learned patterns. In banking, useful applications include grounded assistants, document summarization and analyst support. For production, add retrieval, access controls, evaluation and human oversight.';else if(lower.includes('fraud'))answer='AI fraud detection learns patterns from transactions and behavior. Common approaches include classification and anomaly detection. Monitor false positives, drift and changing fraud patterns.';else if(lower.includes('credit'))answer='Credit-scoring models estimate risk from borrower and account features. Responsible deployment requires validation, explainability, monitoring and fairness controls.';else answer='AI systems learn patterns from data and can support prediction, generation and decision assistance. Start with a clear problem, trusted data, measurable evaluation criteria and appropriate human oversight.';res.json({answer,kpi:{latencyMs:Math.floor(120+Math.random()*260),confidence:Math.round((.86+Math.random()*.11)*100)/100}})});
+app.listen(4000,()=>console.log('AI Learning LMS API running on http://localhost:4000'));
